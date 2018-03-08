@@ -8,7 +8,7 @@
 //
 // Run with -help flag or help subcommand for usage information.
 //
-package main // import "golang.org/x/tools/cmd/guru"
+package main // import "github.com/frankreh/tools/cmd/guru"
 
 import (
 	"bufio"

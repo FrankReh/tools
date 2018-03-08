@@ -46,7 +46,7 @@ import (
 	"sync"
 	"testing"
 
-	guru "golang.org/x/tools/cmd/guru"
+	guru "github.com/frankreh/tools/cmd/guru"
 )
 
 var updateFlag = flag.Bool("update", false, "Update the golden files.")
