@@ -304,16 +304,28 @@ func TestGolden(t *testing.T) {
 		}
 		input := "package test\n" + test.input
 		file := test.name + ".go"
-		g.parsePackage(".", []string{file}, input)
-		// Extract the name and type of the constant from the first line.
-		tokens := strings.SplitN(test.input, " ", 3)
-		if len(tokens) != 3 {
-			t.Fatalf("%s: need type declaration on first line", test.name)
+		conf := stringerConfig()
+		f, err := conf.ParseFile(file, input)
+		if err != nil {
+			t.Fatal(err)
 		}
-		g.generate(tokens[1])
-		got := string(g.format())
-		if got != test.output {
-			t.Errorf("%s: got\n====\n%s====\nexpected\n====%s", test.name, got, test.output)
+		conf.CreateFromFiles(test.name, f)
+		prog, err := conf.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, info := range prog.InitialPackages() {
+			// Extract the name and type of the constant from the first line.
+			tokens := strings.SplitN(test.input, " ", 3)
+			if len(tokens) != 3 {
+				t.Fatalf("%s: need type declaration on first line", test.name)
+			}
+			g.generate(info, tokens[1])
+			got := string(g.format())
+			if got != test.output {
+				t.Errorf("%s: got\n====\n%s====\nexpected\n====%s", test.name, got, test.output)
+			}
 		}
 	}
 }
