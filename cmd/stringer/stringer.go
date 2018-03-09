@@ -10,8 +10,7 @@
 // It has helpful defaults designed for use with go generate.
 //
 // Stringer works best with constants that are consecutive values such as created using iota,
-// but creates good code regardless. In the future it might also provide custom support for
-// constant sets that are bit patterns.
+// but creates good code regardless.
 //
 // For example, given this snippet,
 //
@@ -56,6 +55,32 @@
 // where t is the lower-cased name of the first type listed. It can be overridden
 // with the -output flag.
 //
+// Custom support for constant sets that are bit patterns is enabled through the use
+// of the flag -bitflag. This works for single bit pattern flags. Multi-bit patterns
+// are silently ignored. For example:
+//
+//	//go:generate stringer -bitflag -type=Days
+//	type Days int
+//	const (
+//		Mon Days = 1 << iota
+//		Tue
+//		Wed
+//		Thu
+//		Fri
+//		Sat
+//		Sun
+//		Weekend = Sat | Sun
+//	)
+//
+//		...
+//		d := Wed
+//		fmt.Println(d)       -> Wed
+//		d |= Sun | Mon
+//		fmt.Println(d)       -> "(Mon|Wed|Sun)"
+//		fmt.Println(Weekend) -> "(Sat|Sun)"
+//
+// By default, the generated stringer code for bitflags caches computed values in a map.
+// The flag -nocache specifies that generated code should not employ a cache.
 package main // import "github.com/frankreh/tools/cmd/stringer"
 
 import (
@@ -84,6 +109,8 @@ var (
 	output      = flag.String("output", "", "output file name; default srcdir/<type>_string.go")
 	trimprefix  = flag.String("trimprefix", "", "trim the `prefix` from the generated constant names")
 	linecomment = flag.Bool("linecomment", false, "use line comment text as printed text when present")
+	bitflag     = flag.Bool("bitflag", false, "handle constants as bitflags")
+	nocache     = flag.Bool("nocache", false, "do not use cache within bitflag String methods")
 )
 
 // Usage is a replacement usage function for the flags package.
@@ -199,6 +226,8 @@ func genFile(filename string, info *loader.PackageInfo, typeNames []*types.TypeN
 	g := Generator{
 		trimPrefix:  *trimprefix,
 		lineComment: *linecomment,
+		bitflag:     *bitflag,
+		cache:       *bitflag && !*nocache, // cache is only relevant when bitflag is also set
 	}
 
 	// Print the header and package clause.
@@ -207,6 +236,9 @@ func genFile(filename string, info *loader.PackageInfo, typeNames []*types.TypeN
 	g.Printf("package %s\n", info.Pkg.Name())
 	g.Printf("\n")
 	g.Printf("import \"strconv\"\n") // Used by all methods.
+	if g.bitflag && g.cache {
+		g.Printf("import \"sync\"\n")
+	}
 
 	// Run generate for each type.
 	for _, typeName := range typeNames {
@@ -225,6 +257,8 @@ type Generator struct {
 	buf         bytes.Buffer // Accumulated output.
 	trimPrefix  string
 	lineComment bool
+	bitflag     bool
+	cache       bool
 }
 
 func (g *Generator) Printf(format string, args ...interface{}) {
@@ -255,6 +289,10 @@ func (g *Generator) generate(info *loader.PackageInfo, typeName string) {
 	if len(values) == 0 {
 		log.Fatalf("no values defined for type %s", typeName)
 	}
+	if g.bitflag {
+		g.buildBitflag(values, typeName)
+		return
+	}
 	runs := splitIntoRuns(values)
 	// The decision of which pattern to use depends on the number of
 	// runs in the numbers. If there's only one, it's easy. For more than
@@ -266,8 +304,7 @@ func (g *Generator) generate(info *loader.PackageInfo, typeName string) {
 	// rather than use yet another algorithm such as binary search,
 	// we punt and use a map. In any case, the likelihood of a map
 	// being necessary for any realistic example other than bitmasks
-	// is very low. And bitmasks probably deserve their own analysis,
-	// to be done some other day.
+	// is very low.
 	switch {
 	case len(runs) == 1:
 		g.buildOneRun(runs, typeName)
