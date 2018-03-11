@@ -1,12 +1,17 @@
 // Copyright 2018 Frank Rehwinkel
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+// These routines implement the bulk of the bitflag code generation for stringer.
+
 package main
 
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 )
 
 // buildBitflag generates the variables and String method for bitflag values.
@@ -17,14 +22,27 @@ func (g *Generator) buildBitflag(values []Value, typeName string) {
 	if zero != nil {
 		zeroName = zero.name
 	}
+	initialValue := runs[0][0].String()
 
-	switch {
-	case len(runs) == 1:
-		g.buildOneRunBitflag(runs, typeName, zeroName)
-	case maxGap(runs) <= 4:
-		g.buildOneRunBitflagShortGaps(runs, typeName, zeroName)
-	default:
-		g.buildOneRunBitflagLongGaps(runs, typeName, zeroName)
+	name, offsets, skips := g.nameAndRest(runs)
+
+	name = fmt.Sprintf("_%s_name = %q", typeName, name)
+
+	g.Printf("\n")
+	g.declareNameAndRest(typeName, name, offsets, skips)
+
+	if g.cache {
+		if len(skips) == 0 {
+			g.Printf(stringBitflagCacheCode, typeName, 0, zeroName, 0, initialValue, 256)
+		} else {
+			g.Printf(stringBitflagCacheCodeWithSkips, typeName, 0, zeroName, 0, initialValue, 256)
+		}
+	} else {
+		if len(skips) == 0 {
+			g.Printf(stringBitflagCode, typeName, 0, zeroName, 0, initialValue, 0)
+		} else {
+			g.Printf(stringBitflagCodeWithSkips, typeName, 0, zeroName, 0, initialValue, 0)
+		}
 	}
 }
 
@@ -73,92 +91,66 @@ func splitIntoBitflagRuns(values []Value) (*Value, [][]Value) {
 	return zero, runs
 }
 
-// maxGap returns the max number of bitflag constants missing between runs of consecutive bitflags.
-func maxGap(runs [][]Value) int {
-	m := 0
+// singleBitSet returns true when one and only one bit is set in the value v.
+func singleBitSet(v uint64) bool {
+	return v != 0 && (v&(v-1)) == 0
+}
 
-	for r := range runs[:len(runs)-1] {
-		gapHead := runLastValue(runs[r]).value
-		gapTail := runs[r+1][0].value
-		g := 0
-		gapHead <<= 1
-		for gapHead < gapTail {
-			g++
-			gapHead <<= 1
+// nameAndRest returns the name string for the runs, and the list of offsets and skips.
+func (g *Generator) nameAndRest(runs [][]Value) (name string, offsets []int, skips []int) {
+	var names []string
+	for r, run := range runs {
+		for i := range run {
+			n := run[i].name
+			o := len(n)
+
+			names = append(names, n)
+			if o > 255 {
+				fmt.Fprintf(os.Stderr, "stringer: name too long (%d): %s\n", o, n)
+
+				os.Exit(1)
+			}
+			offsets = append(offsets, o)
 		}
-		if g > m {
-			m = g
+
+		if r < len(runs)-1 {
+			// Handle gap to next run by appending the skip amount in the skips
+			// list and appending a zero to the offsets list.
+			skips = append(skips, shiftCount(runLastValue(run).value, runs[r+1][0].value)-1)
+			offsets = append(offsets, 0) // 0 will signal to skip.
 		}
 	}
-
-	return m
+	name = strings.Join(names, "")
+	return
 }
 
-// buildOneRunBitflag generates the variables and String method for a single run of contiguous values.
-func (g *Generator) buildOneRunBitflag(runs [][]Value, typeName, zeroName string) {
-	values := runs[0]
-	g.Printf("\n")
-	//g.declareIndexAndNameVar(values, typeName)
-
-	index, name := g.createIndexAndNameDecl(values, typeName, "")
-	g.declareIndex(typeName, name, index, "")
-
-	// The generated code is simple enough to write as a Printf format.
-	spanGapCheck := ""
-	initialValue := values[0].String()
-	if g.cache {
-		g.Printf(stringBitflagCacheCode, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 256)
-	} else {
-		g.Printf(stringBitflagCode, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 0)
+// shiftCount returns number of times prev needs to be shifted to meet or exceed next.
+func shiftCount(prev, next uint64) int {
+	count := 0
+	for prev < next {
+		count++
+		prev <<= 1
 	}
+	return count
 }
 
-// buildOneRunBitflagShortGaps generates the variables and String method for runs with short gaps in between.
-func (g *Generator) buildOneRunBitflagShortGaps(runs [][]Value, typeName, zeroName string) {
-	values := runs[0]
-	g.Printf("\n")
-
-	index, name := g.createIndexAndNameDeclShortGapBitflags(runs, typeName, "")
-	g.declareIndex(typeName, name, index, "")
-
-	// The generated code is simple enough to write as a Printf format.
-	spanGapCheck := "p0 == p1 || "
-	initialValue := values[0].String()
-	if g.cache {
-		g.Printf(stringBitflagCacheCode, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 256)
-	} else {
-		g.Printf(stringBitflagCode, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 0)
-	}
+func runLastValue(run []Value) *Value {
+	return &run[len(run)-1]
 }
 
-// buildOneRunBitflagLongGaps generates the variables and String method for runs with long gaps in between.
-func (g *Generator) buildOneRunBitflagLongGaps(runs [][]Value, typeName, zeroName string) {
-	values := runs[0]
-	g.Printf("\n")
-	index, skip, name := g.createIndexAndNameDeclLongGapsBitflags(runs, typeName, "")
-	g.declareIndex(typeName, name, index, skip)
+// declareNameAndRest
+func (g *Generator) declareNameAndRest(typeName, name string, offsets, skips []int) {
+	offset := fmt.Sprintf("_%s_offset = [...]uint8{%s}", typeName, intString(offsets))
 
-	// The generated code is simple enough to write as a Printf format.
-	spanGapCheck := ""
-	initialValue := values[0].String()
-	if g.cache {
-		g.Printf(stringBitflagCacheCodeLongGaps, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 256)
-	} else {
-		g.Printf(stringBitflagCodeLongGaps, typeName, usize(len(values)), zeroName, spanGapCheck, initialValue, 0)
-	}
-}
-
-// declareIndex
-func (g *Generator) declareIndex(typeName, name, index, skip string) {
 	g.Printf("const %s\n", name)
-	if !g.cache && skip == "" {
-		g.Printf("var %s\n", index)
+	if !g.cache && len(skips) == 0 {
+		g.Printf("var %s\n", offset)
 		return
 	}
 	g.Printf("var (\n")
-	g.Printf("\t%s\n", index)
-	if skip != "" {
-		g.Printf("\t%s\n", skip)
+	g.Printf("\t%s\n", offset)
+	if len(skips) != 0 {
+		g.Printf("\t_%s_skips = [...]uint8{%s}\n", typeName, intString(skips))
 	}
 	if g.cache {
 		g.Printf("\t_%[1]s_cache = make(map[%[1]s]string)\n", typeName)
@@ -167,108 +159,22 @@ func (g *Generator) declareIndex(typeName, name, index, skip string) {
 	g.Printf(")\n\n")
 }
 
-// createIndexAndNameDeclShortGapBitflags returns the pair of declarations for the runs. The caller will add "const" and "var".
-func (g *Generator) createIndexAndNameDeclShortGapBitflags(runs [][]Value, typeName string, suffix string) (string, string) {
-	b := new(bytes.Buffer)
-	var indexes []int
-	for r, run := range runs {
-		for i := range run {
-			b.WriteString(run[i].name)
-			indexes = append(indexes, b.Len())
-		}
-
-		if r == len(runs)-1 {
-			continue
-		}
-		// Handle short gaps by duplicating the last index as many times as necessary.
-		gapHead := runLastValue(run).value
-		gapTail := runs[r+1][0].value
-		gapHead <<= 1
-		for gapHead < gapTail {
-			indexes = append(indexes, indexes[len(indexes)-1])
-			gapHead <<= 1
-		}
+// intString returns the string of int values
+func intString(values []int) string {
+	r := new(bytes.Buffer)
+	sep := ""
+	for _, v := range values {
+		fmt.Fprintf(r, "%s%d", sep, v)
+		sep = ", "
 	}
-	nameConst := fmt.Sprintf("_%s_name%s = %q", typeName, suffix, b.String())
-	nameLen := b.Len()
-	b.Reset()
-	fmt.Fprintf(b, "_%s_index%s = [...]uint%d{0, ", typeName, suffix, usize(nameLen))
-	for i, v := range indexes {
-		if i > 0 {
-			fmt.Fprintf(b, ", ")
-		}
-		fmt.Fprintf(b, "%d", v)
-	}
-	fmt.Fprintf(b, "}")
-	return b.String(), nameConst
-}
-
-// createIndexAndNameDeclLongGapsBitflags returns the pair of declarations for the runs. The caller will add "const" and "var".
-func (g *Generator) createIndexAndNameDeclLongGapsBitflags(runs [][]Value, typeName string, suffix string) (string, string, string) {
-	b := new(bytes.Buffer)
-	var indexes []int
-	var skips []int
-	for r, run := range runs {
-		for i := range run {
-			b.WriteString(run[i].name)
-			indexes = append(indexes, b.Len())
-		}
-
-		if r == len(runs)-1 {
-			continue
-		}
-		// Handle each by placing a single duplicate entry in the indexes list
-		// and placing the skip amount in the skips list.
-		gapHead := runLastValue(run).value
-		gapTail := runs[r+1][0].value
-		skipAmount := 0
-		gapHead <<= 1
-		for gapHead < gapTail {
-			skipAmount++
-			gapHead <<= 1
-		}
-		skips = append(skips, skipAmount)
-		indexes = append(indexes, indexes[len(indexes)-1])
-	}
-	nameConst := fmt.Sprintf("_%s_name%s = %q", typeName, suffix, b.String())
-
-	b.Reset()
-	fmt.Fprintf(b, "_%s_skips = [...]uint8{", typeName)
-	for i, v := range skips {
-		if i > 0 {
-			fmt.Fprintf(b, ", ")
-		}
-		fmt.Fprintf(b, "%d", v)
-	}
-	fmt.Fprintf(b, "}")
-	skipsStr := b.String()
-	b.Reset()
-
-	fmt.Fprintf(b, "_%s_index%s = [...]uint%d{0, ", typeName, suffix, usize(len(nameConst)))
-	for i, v := range indexes {
-		if i > 0 {
-			fmt.Fprintf(b, ", ")
-		}
-		fmt.Fprintf(b, "%d", v)
-	}
-	fmt.Fprintf(b, "}")
-	return b.String(), skipsStr, nameConst
-}
-
-func runLastValue(run []Value) *Value {
-	return &run[len(run)-1]
-}
-
-// singleBitSet returns true when one and only one bit is set in the value v.
-func singleBitSet(v uint64) bool {
-	return v != 0 && (v&(v-1)) == 0
+	return r.String()
 }
 
 // Arguments to format are:
 //	[1]: type name
-//	[2]: size of index element (8 for uint8 etc.)
+//	[2]: 0 a noop
 //	[3]: zeroName
-//	[4]: span gap check : "" or "p0 == p1 || "
+//	[4]: 0 a noop
 //	[5]: initial value : example "(1)"
 //	[6]: max cache size
 const stringBitflagCode = `func (m %[1]s) String() string {
@@ -277,131 +183,13 @@ const stringBitflagCode = `func (m %[1]s) String() string {
 	}
 
 	var b []byte
-	l := len(_%[1]s_index)
+	l := len(_%[1]s_offset)
 	v := %[1]s(%[5]s)
-	p1 := _%[1]s_index[0]
-	p0 := p1
-	for i := 1; i < l; i, v = i+1, v<<1 {
-		p0, p1 = p1, _%[1]s_index[i]
-		if %[4]sv&m == 0 {
-			continue
-		}
-		m ^= v
-		if len(b) == 0 {
-			if m == 0 {
-				return _%[1]s_name[p0:p1]
-			}
-			b = append(b, '(')
-		} else {
-			b = append(b, '|')
-		}
-		b = append(b, _%[1]s_name[p0:p1]...)
-		if m == 0 {
-			b = append(b, ')')
-			return string(b)
-		}
-	}
-	s := "%[1]s(0x" + strconv.FormatUint(uint64(m), 16) + ")"
-	if len(b) == 0 {
-		return s
-	}
-	b = append(b, '|')
-	b = append(b, s...)
-	b = append(b, ')')
-	return string(b)
-}
-`
-
-// Arguments to format are:
-//	[1]: type name
-//	[2]: size of index element (8 for uint8 etc.)
-//	[3]: zeroName
-//	[4]: span gap check : "" or "p0 == p1 || "
-//	[5]: initial value : example "(1)"
-//	[6]: cache size limit
-const stringBitflagCacheCode = `func (m %[1]s) String() string {
-	_%[1]s_cachemu.Lock()
-	s, ok := _%[1]s_cache[m]
-	_%[1]s_cachemu.Unlock()
-	if ok {
-		return s
-	}
-	s = m._string()
-	_%[1]s_cachemu.Lock()
-	if len(_%[1]s_cache) >= %[6]d {
-		_%[1]s_cache = make(map[%[1]s]string, %[6]d)
-	}
-	_%[1]s_cache[m] = s
-	_%[1]s_cachemu.Unlock()
-	return s
-}
-
-func (m %[1]s) _string() string {
-	if m == 0 {
-		return "%[3]s"
-	}
-
-	var b []byte
-	l := len(_%[1]s_index)
-	v := %[1]s(%[5]s)
-	p1 := _%[1]s_index[0]
-	p0 := p1
-	for i := 1; i < l; i, v = i+1, v<<1 {
-		p0, p1 = p1, _%[1]s_index[i]
-		if %[4]sv&m == 0 {
-			continue
-		}
-		m ^= v
-		if len(b) == 0 {
-			if m == 0 {
-				return _%[1]s_name[p0:p1]
-			}
-			b = append(b, '(')
-		} else {
-			b = append(b, '|')
-		}
-		b = append(b, _%[1]s_name[p0:p1]...)
-		if m == 0 {
-			b = append(b, ')')
-			return string(b)
-		}
-	}
-	s := "%[1]s(0x" + strconv.FormatUint(uint64(m), 16) + ")"
-	if len(b) == 0 {
-		return s
-	}
-	b = append(b, '|')
-	b = append(b, s...)
-	b = append(b, ')')
-	return string(b)
-}
-`
-
-// Arguments to format are:
-//	[1]: type name
-//	[2]: size of index element (8 for uint8 etc.)
-//	[3]: zeroName
-//	[4]: span gap check - a noop for this format
-//	[5]: initial value : example "(1)"
-//	[6]: cache size limit
-const stringBitflagCodeLongGaps = `func (m %[1]s) String() string {
-	if m == 0 {
-		return "%[3]s"
-	}
-
-	var b []byte
-	l := len(_%[1]s_index)
-	si := 0
-	v := %[1]s(%[5]s)
-	p1 := _%[1]s_index[0]
-	p0 := p1
-	for i := 1; i < l; i, v = i+1, v<<1 {
-		p0, p1 = p1, _%[1]s_index[i]
-		if p0 == p1 {
-			v <<= _%[1]s_skips[si] - 1
-			si++
-			continue
-		}
+	p0 := 0
+	p1 := 0
+	for i := 0; i < l; i, v = i+1, v<<1 {
+		p0 = p1
+		p1 += int(_%[1]s_offset[i])
 		if v&m == 0 {
 			continue
 		}
@@ -433,12 +221,12 @@ const stringBitflagCodeLongGaps = `func (m %[1]s) String() string {
 
 // Arguments to format are:
 //	[1]: type name
-//	[2]: size of index element (8 for uint8 etc.)
+//	[2]: 0 a noop
 //	[3]: zeroName
-//	[4]: span gap check - a noop for this format
+//	[4]: 0 a noop
 //	[5]: initial value : example "(1)"
 //	[6]: cache size limit
-const stringBitflagCacheCodeLongGaps = `func (m %[1]s) String() string {
+const stringBitflagCacheCode = `func (m %[1]s) String() string {
 	_%[1]s_cachemu.Lock()
 	s, ok := _%[1]s_cache[m]
 	_%[1]s_cachemu.Unlock()
@@ -461,18 +249,142 @@ func (m %[1]s) _string() string {
 	}
 
 	var b []byte
-	l := len(_%[1]s_index)
-	si := 0
+	l := len(_%[1]s_offset)
 	v := %[1]s(%[5]s)
-	p1 := _%[1]s_index[0]
-	p0 := p1
-	for i := 1; i < l; i, v = i+1, v<<1 {
-		p0, p1 = p1, _%[1]s_index[i]
-		if p0 == p1 {
+	p0 := 0
+	p1 := 0
+	for i := 0; i < l; i, v = i+1, v<<1 {
+		p0 = p1
+		p1 += int(_%[1]s_offset[i])
+		if v&m == 0 {
+			continue
+		}
+		m ^= v
+		if len(b) == 0 {
+			if m == 0 {
+				return _%[1]s_name[p0:p1]
+			}
+			b = append(b, '(')
+		} else {
+			b = append(b, '|')
+		}
+		b = append(b, _%[1]s_name[p0:p1]...)
+		if m == 0 {
+			b = append(b, ')')
+			return string(b)
+		}
+	}
+	s := "%[1]s(0x" + strconv.FormatUint(uint64(m), 16) + ")"
+	if len(b) == 0 {
+		return s
+	}
+	b = append(b, '|')
+	b = append(b, s...)
+	b = append(b, ')')
+	return string(b)
+}
+`
+
+// Arguments to format are:
+//	[1]: type name
+//	[2]: 0 a noop
+//	[3]: zeroName
+//	[4]: 0 a noop
+//	[5]: initial value : example "(1)"
+//	[6]: cache size limit
+const stringBitflagCodeWithSkips = `func (m %[1]s) String() string {
+	if m == 0 {
+		return "%[3]s"
+	}
+
+	var b []byte
+	l := len(_%[1]s_offset)
+	v := %[1]s(%[5]s)
+	si := 0
+	p0 := 0
+	p1 := 0
+	for i := 0; i < l; i, v = i+1, v<<1 {
+		o := _%[1]s_offset[i]
+		if o == 0 {
 			v <<= _%[1]s_skips[si] - 1
 			si++
 			continue
 		}
+		p0 = p1
+		p1 += int(o)
+		if v&m == 0 {
+			continue
+		}
+		m ^= v
+		if len(b) == 0 {
+			if m == 0 {
+				return _%[1]s_name[p0:p1]
+			}
+			b = append(b, '(')
+		} else {
+			b = append(b, '|')
+		}
+		b = append(b, _%[1]s_name[p0:p1]...)
+		if m == 0 {
+			b = append(b, ')')
+			return string(b)
+		}
+	}
+	s := "%[1]s(0x" + strconv.FormatUint(uint64(m), 16) + ")"
+	if len(b) == 0 {
+		return s
+	}
+	b = append(b, '|')
+	b = append(b, s...)
+	b = append(b, ')')
+	return string(b)
+}
+`
+
+// Arguments to format are:
+//	[1]: type name
+//	[2]: 0 a noop
+//	[3]: zeroName
+//	[4]: 0 a noop
+//	[5]: initial value : example "(1)"
+//	[6]: cache size limit
+const stringBitflagCacheCodeWithSkips = `func (m %[1]s) String() string {
+	_%[1]s_cachemu.Lock()
+	s, ok := _%[1]s_cache[m]
+	_%[1]s_cachemu.Unlock()
+	if ok {
+		return s
+	}
+	s = m._string()
+	_%[1]s_cachemu.Lock()
+	if len(_%[1]s_cache) >= %[6]d {
+		_%[1]s_cache = make(map[%[1]s]string, %[6]d)
+	}
+	_%[1]s_cache[m] = s
+	_%[1]s_cachemu.Unlock()
+	return s
+}
+
+func (m %[1]s) _string() string {
+	if m == 0 {
+		return "%[3]s"
+	}
+
+	var b []byte
+	l := len(_%[1]s_offset)
+	v := %[1]s(%[5]s)
+	si := 0
+	p0 := 0
+	p1 := 0
+	for i := 0; i < l; i, v = i+1, v<<1 {
+		o := _%[1]s_offset[i]
+		if o == 0 {
+			v <<= _%[1]s_skips[si] - 1
+			si++
+			continue
+		}
+		p0 = p1
+		p1 += int(o)
 		if v&m == 0 {
 			continue
 		}
