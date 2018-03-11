@@ -110,7 +110,13 @@ var (
 	trimprefix  = flag.String("trimprefix", "", "trim the `prefix` from the generated constant names")
 	linecomment = flag.Bool("linecomment", false, "use line comment text as printed text when present")
 	bitflag     = flag.Bool("bitflag", false, "handle constants as bitflags")
-	nocache     = flag.Bool("nocache", false, "do not use cache within bitflag String methods")
+	nocache     = flag.Bool("nocache", false, "do not gen code for bitflag that uses cache")
+	notable     = flag.Bool("notable", false, "do not gen code for bitflag that is table driven")
+)
+
+var (
+	// The file created when -bitflag -notable are set.
+	stringerBitflagFilename = "stringerbitflag.go"
 )
 
 // Usage is a replacement usage function for the flags package.
@@ -168,6 +174,10 @@ func main() {
 	unseen := make(map[string]bool)
 	for _, typeName := range strings.Split(*typeNames, ",") {
 		unseen[typeName] = true
+	}
+
+	if *bitflag && !*notable {
+		genStringerBitflagFile()
 	}
 
 	for _, info := range prog.InitialPackages() {
@@ -228,6 +238,7 @@ func genFile(filename string, info *loader.PackageInfo, typeNames []*types.TypeN
 		lineComment: *linecomment,
 		bitflag:     *bitflag,
 		cache:       *bitflag && !*nocache, // cache is only relevant when bitflag is also set
+		table:       !*notable,
 	}
 
 	// Print the header and package clause.
@@ -235,9 +246,11 @@ func genFile(filename string, info *loader.PackageInfo, typeNames []*types.TypeN
 	g.Printf("\n")
 	g.Printf("package %s\n", info.Pkg.Name())
 	g.Printf("\n")
-	g.Printf("import \"strconv\"\n") // Used by all methods.
-	if g.bitflag && g.cache {
-		g.Printf("import \"sync\"\n")
+	if !*bitflag || *notable {
+		g.Printf("import \"strconv\"\n") // Used by all methods.
+		if g.bitflag && g.cache {
+			g.Printf("import \"sync\"\n")
+		}
 	}
 
 	// Run generate for each type.
@@ -259,6 +272,7 @@ type Generator struct {
 	lineComment bool
 	bitflag     bool
 	cache       bool
+	table       bool
 }
 
 func (g *Generator) Printf(format string, args ...interface{}) {
@@ -347,15 +361,20 @@ func splitIntoRuns(values []Value) [][]Value {
 	return runs
 }
 
-// format returns the gofmt-ed contents of the Generator's buffer.
+// format returns the gofmt-ed contents of the generated buffer.
 func (g *Generator) format() []byte {
-	src, err := format.Source(g.buf.Bytes())
+	return formatBytes(g.buf.Bytes())
+}
+
+// formatBytes returns the gofmt-ed contents of the buffer.
+func formatBytes(b []byte) []byte {
+	src, err := format.Source(b)
 	if err != nil {
 		// Should never happen, but can arise when developing this code.
 		// The user can compile the output to see the error.
 		log.Printf("warning: internal error: invalid Go generated: %s", err)
 		log.Printf("warning: compile the package to analyze the error")
-		return g.buf.Bytes()
+		return b
 	}
 	return src
 }

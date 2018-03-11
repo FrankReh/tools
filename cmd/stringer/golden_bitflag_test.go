@@ -15,91 +15,97 @@ import (
 	"testing"
 )
 
-// GoldenBitflag represents a test case for bitflag constants.
-type GoldenBitflag struct {
-	name            string
-	trimPrefix      string
-	lineComment     bool
-	input           string // input; the package clause is provided when running the test.
-	nocache_output  string // exected output having specified nocache to the generator.
-	yescache_output string // exected output with the generator allowed to use a map to cache results.
-}
-
-var goldenbitflag = []GoldenBitflag{
-	{"days", "", false, days_in_bitflag, days_out_bitflag, days_out_bitflag_cache},
-	{"gap", "", false, gap_in_bitflag, gap_out_bitflag, gap_out_bitflag_cache},
-	{"largegap", "", false, largegap_in_bitflag, largegap_out_bitflag, largegap_out_bitflag_cache},
-	{"largestgap", "", false, largestgap_in_bitflag, largestgap_out_bitflag, largestgap_out_bitflag_cache},
-}
-
 func TestGoldenBitflag(t *testing.T) {
-	for _, test := range goldenbitflag {
-		t.Run("nocache"+test.name, func(t *testing.T) {
-			g := Generator{
-				trimPrefix:  test.trimPrefix,
-				lineComment: test.lineComment,
-				bitflag:     true,
-				cache:       false,
-			}
-			input := "package test\n" + test.input
-			file := test.name + ".go"
-			conf := stringerConfig()
-			f, err := conf.ParseFile(file, input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			conf.CreateFromFiles(test.name, f)
-			prog, err := conf.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
+	for _, test := range []struct {
+		name        string
+		trimPrefix  string
+		lineComment bool
+		input       string // input; the package clause is provided when running the test.
 
-			for _, info := range prog.InitialPackages() {
-				// Extract the name and type of the constant from the first line.
-				tokens := strings.SplitN(test.input, " ", 3)
-				if len(tokens) != 3 {
-					t.Fatalf("%s: need type declaration on first line", test.name)
-				}
-				g.generate(info, tokens[1])
-				got := string(g.format())
-				if got != test.nocache_output {
-					t.Errorf("%s: got\n====\n%s====\nexpected\n====%s", test.name, got, test.nocache_output)
-				}
-			}
-		})
-		t.Run("yescache"+test.name, func(t *testing.T) {
-			g := Generator{
-				trimPrefix:  test.trimPrefix,
-				lineComment: test.lineComment,
-				bitflag:     true,
-				cache:       true,
-			}
-			input := "package test\n" + test.input
-			file := test.name + ".go"
-			conf := stringerConfig()
-			f, err := conf.ParseFile(file, input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			conf.CreateFromFiles(test.name, f)
-			prog, err := conf.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
+		// Two outputs when table format is false
+		nocache_notable_output  string // expected output having specified nocache to the generator.
+		yescache_notable_output string // expected output with the generator allowed to use a map to cache results.
 
-			for _, info := range prog.InitialPackages() {
-				// Extract the name and type of the constant from the first line.
-				tokens := strings.SplitN(test.input, " ", 3)
-				if len(tokens) != 3 {
-					t.Fatalf("%s: need type declaration on first line", test.name)
+		// Two outputs when table format is true
+		nocache_yestable_output  string
+		yescache_yestable_output string
+	}{
+		{"days", "", false, days_in_bitflag,
+			days_out_bitflag, days_out_bitflag_cache,
+			days_out_bitflag_table, days_out_bitflag_cache_table},
+		{"gap", "", false, gap_in_bitflag,
+			gap_out_bitflag, gap_out_bitflag_cache,
+			gap_out_bitflag_table, gap_out_bitflag_cache_table},
+		{"largegap", "", false, largegap_in_bitflag,
+			largegap_out_bitflag, largegap_out_bitflag_cache,
+			largegap_out_bitflag_table, largegap_out_bitflag_cache_table},
+		{"largestgap", "", false, largestgap_in_bitflag,
+			largestgap_out_bitflag, largestgap_out_bitflag_cache,
+			largestgap_out_bitflag_table, largestgap_out_bitflag_cache_table},
+	} {
+
+		// Run two versions of test, one with cache false, other with cache true.
+
+		for _, table := range []bool{false, true} {
+			for _, cache := range []bool{false, true} {
+				var cname, expected string
+				if table {
+					if cache {
+						cname = "cache=y,table=y"
+						expected = test.yescache_yestable_output
+					} else {
+						cname = "cache=n,table=y"
+						expected = test.nocache_yestable_output
+					}
+				} else {
+					if cache {
+						cname = "cache=y,table=n"
+						expected = test.yescache_notable_output
+					} else {
+						cname = "cache=n,table=n"
+						expected = test.nocache_notable_output
+					}
 				}
-				g.generate(info, tokens[1])
-				got := string(g.format())
-				if got != test.yescache_output {
-					t.Errorf("%s: got\n====\n%s====\nexpected\n====%s", test.name, got, test.yescache_output)
-				}
+				expected = string(formatBytes([]byte(expected)))
+				t.Run(cname+test.name, func(t *testing.T) {
+					g := Generator{
+						trimPrefix:  test.trimPrefix,
+						lineComment: test.lineComment,
+						bitflag:     true,
+						cache:       cache,
+						table:       table,
+					}
+					input := "package test\n" + test.input
+					file := test.name + ".go"
+					conf := stringerConfig()
+					f, err := conf.ParseFile(file, input)
+					if err != nil {
+						t.Fatal(err)
+					}
+					conf.CreateFromFiles(test.name, f)
+					prog, err := conf.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					for _, info := range prog.InitialPackages() {
+						// Extract the name and type of the constant from the first line.
+						tokens := strings.SplitN(test.input, " ", 3)
+						if len(tokens) != 3 {
+							t.Fatalf("%s: need type declaration on first line", test.name)
+						}
+						g.generate(info, tokens[1])
+						got := string(g.format())
+						if got != expected {
+							t.Errorf("%s: got\n====\nlen %d====\nexpected\n====len %d",
+								test.name, len(got), len(expected))
+							t.Errorf("%s: got\n====\n%s====\nexpected\n====%s",
+								test.name, got, expected)
+						}
+					}
+				})
 			}
-		})
+		}
 	}
 }
 
@@ -168,13 +174,13 @@ const _Days_name = "MondayTuesdayWednesdayThursdayFridaySaturdaySunday"
 var (
 	_Days_offset  = [...]uint8{6, 7, 9, 8, 6, 8, 6}
 	_Days_cache   = make(map[Days]string)
-	_Days_cachemu sync.Mutex
+	_Days_cachemu sync.RWMutex
 )
 
 func (m Days) String() string {
-	_Days_cachemu.Lock()
+	_Days_cachemu.RLock()
 	s, ok := _Days_cache[m]
-	_Days_cachemu.Unlock()
+	_Days_cachemu.RUnlock()
 	if ok {
 		return s
 	}
@@ -227,6 +233,34 @@ func (m Days) _string() string {
 	b = append(b, s...)
 	b = append(b, ')')
 	return string(b)
+}
+`
+const days_out_bitflag_table = `
+var _Days_stringer = _stringerBitflag{
+	typename: "Days",
+	zero:     "Days(0)",
+	first:    uint64(1),
+	names:    "MondayTuesdayWednesdayThursdayFridaySaturdaySunday",
+	offsets:  []uint8{6, 7, 9, 8, 6, 8, 6},
+}
+
+func (m Days) String() string {
+	return _Days_stringer.mstring(uint64(m))
+}
+`
+const days_out_bitflag_cache_table = `
+var _Days_stringer = _stringerBitflagCache{
+	sb: _stringerBitflag{
+		typename: "Days",
+		zero:     "Days(0)",
+		first:    uint64(1),
+		names:    "MondayTuesdayWednesdayThursdayFridaySaturdaySunday",
+		offsets:  []uint8{6, 7, 9, 8, 6, 8, 6},
+	},
+}
+
+func (m Days) String() string {
+	return _Days_stringer.mstring(uint64(m))
 }
 `
 
@@ -309,13 +343,13 @@ var (
 	_Gap_offset  = [...]uint8{3, 5, 0, 4, 3, 5, 5, 4, 0, 6}
 	_Gap_skips   = [...]uint8{1, 1}
 	_Gap_cache   = make(map[Gap]string)
-	_Gap_cachemu sync.Mutex
+	_Gap_cachemu sync.RWMutex
 )
 
 func (m Gap) String() string {
-	_Gap_cachemu.Lock()
+	_Gap_cachemu.RLock()
 	s, ok := _Gap_cache[m]
-	_Gap_cachemu.Unlock()
+	_Gap_cachemu.RUnlock()
 	if ok {
 		return s
 	}
@@ -375,6 +409,36 @@ func (m Gap) _string() string {
 	b = append(b, s...)
 	b = append(b, ')')
 	return string(b)
+}
+`
+const gap_out_bitflag_table = `
+var _Gap_stringer = _stringerBitflag{
+	typename: "Gap",
+	zero:     "Zero",
+	first:    uint64(4),
+	names:    "TwoThreeFiveSixSevenEightNineEleven",
+	offsets:  []uint8{3, 5, 0, 4, 3, 5, 5, 4, 0, 6},
+	skips:    []uint8{1, 1},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
+}
+`
+const gap_out_bitflag_cache_table = `
+var _Gap_stringer = _stringerBitflagCache{
+	sb: _stringerBitflag{
+		typename: "Gap",
+		zero:     "Zero",
+		first:    uint64(4),
+		names:    "TwoThreeFiveSixSevenEightNineEleven",
+		offsets:  []uint8{3, 5, 0, 4, 3, 5, 5, 4, 0, 6},
+		skips:    []uint8{1, 1},
+	},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
 }
 `
 
@@ -451,13 +515,13 @@ var (
 	_Gap_offset  = [...]uint8{5, 0, 9, 0, 10}
 	_Gap_skips   = [...]uint8{23, 31}
 	_Gap_cache   = make(map[Gap]string)
-	_Gap_cachemu sync.Mutex
+	_Gap_cachemu sync.RWMutex
 )
 
 func (m Gap) String() string {
-	_Gap_cachemu.Lock()
+	_Gap_cachemu.RLock()
 	s, ok := _Gap_cache[m]
-	_Gap_cachemu.Unlock()
+	_Gap_cachemu.RUnlock()
 	if ok {
 		return s
 	}
@@ -517,6 +581,36 @@ func (m Gap) _string() string {
 	b = append(b, s...)
 	b = append(b, ')')
 	return string(b)
+}
+`
+const largegap_out_bitflag_table = `
+var _Gap_stringer = _stringerBitflag{
+	typename: "Gap",
+	zero:     "Gap(0)",
+	first:    uint64(128),
+	names:    "SevenThirtyOneSixtyThree",
+	offsets:  []uint8{5, 0, 9, 0, 10},
+	skips:    []uint8{23, 31},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
+}
+`
+const largegap_out_bitflag_cache_table = `
+var _Gap_stringer = _stringerBitflagCache{
+	sb: _stringerBitflag{
+		typename: "Gap",
+		zero:     "Gap(0)",
+		first:    uint64(128),
+		names:    "SevenThirtyOneSixtyThree",
+		offsets:  []uint8{5, 0, 9, 0, 10},
+		skips:    []uint8{23, 31},
+	},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
 }
 `
 
@@ -592,13 +686,13 @@ var (
 	_Gap_offset  = [...]uint8{4, 0, 10}
 	_Gap_skips   = [...]uint8{62}
 	_Gap_cache   = make(map[Gap]string)
-	_Gap_cachemu sync.Mutex
+	_Gap_cachemu sync.RWMutex
 )
 
 func (m Gap) String() string {
-	_Gap_cachemu.Lock()
+	_Gap_cachemu.RLock()
 	s, ok := _Gap_cache[m]
-	_Gap_cachemu.Unlock()
+	_Gap_cachemu.RUnlock()
 	if ok {
 		return s
 	}
@@ -658,5 +752,35 @@ func (m Gap) _string() string {
 	b = append(b, s...)
 	b = append(b, ')')
 	return string(b)
+}
+`
+const largestgap_out_bitflag_table = `
+var _Gap_stringer = _stringerBitflag{
+	typename: "Gap",
+	zero:     "Gap(0)",
+	first:    uint64(1),
+	names:    "ZeroSixtyThree",
+	offsets:  []uint8{4, 0, 10},
+	skips:    []uint8{62},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
+}
+`
+const largestgap_out_bitflag_cache_table = `
+var _Gap_stringer = _stringerBitflagCache{
+	sb: _stringerBitflag{
+		typename: "Gap",
+		zero:     "Gap(0)",
+		first:    uint64(1),
+		names:    "ZeroSixtyThree",
+		offsets:  []uint8{4, 0, 10},
+		skips:    []uint8{62},
+	},
+}
+
+func (m Gap) String() string {
+	return _Gap_stringer.mstring(uint64(m))
 }
 `
