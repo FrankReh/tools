@@ -176,9 +176,8 @@ func main() {
 		unseen[typeName] = true
 	}
 
-	if *bitflag && !*notable {
-		genStringerBitflagFile()
-	}
+	// Have common bitflag code written out one time if tables are used.
+	writeStringerBitflagFile = *bitflag && !*notable
 
 	for _, info := range prog.InitialPackages() {
 		// Find types defined in this package.
@@ -207,6 +206,9 @@ func main() {
 			outputName = filepath.Join(dir, strings.ToLower(baseName))
 		}
 		if err := genFile(outputName, info, names); err != nil {
+			log.Fatalf("writing output: %s", err)
+		}
+		if err := genStringerBitflagFile(info.Pkg.Name()); err != nil {
 			log.Fatalf("writing output: %s", err)
 		}
 	}
