@@ -14,7 +14,7 @@ In addition, stringer is modified to handle bit pattern constants.
 
 Because the original import paths remain in
 the code, the guru and stringer commands build only after also
-installing golang.org/x/tools. Refer to https:golang.org/x/tools.
+installing golang.org/x/tools. Refer to https://golang.org/x/tools.
 
 After the two repos are downloaded, test and build the two commands
 from their respective directories, `cmd/guru` and `cmd/stringer`.
