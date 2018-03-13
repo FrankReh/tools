@@ -1,27 +1,45 @@
-# Go Tools
+# Go Tools: guru and stringer
 
-This subrepository holds the source for various packages and tools that support
-the Go programming language.
+This repository is forked from https://github.com/golang/tools which itself is a
+mirror of https://golang.org/x/tools
 
-Some of the tools, `godoc` and `vet` for example, are included in binary Go
-distributions.
+Two commands are modified in this fork: guru and stringer.
 
-Others, including the Go `guru` and the test coverage tool, can be fetched with
-`go get`.
+Guru is modified to allow it to work with cgo files.
 
-Packages include a type-checker for Go and an implementation of the
-Static Single Assignment form (SSA) representation for Go programs.
+Stringer is modified to allow it to also work with cgo files.
+In addition, stringer is modified to handle bit pattern constants.
 
 ## Download/Install
 
-The easiest way to install is to run `go get -u golang.org/x/tools/...`. You can
-also manually git clone the repository to `$GOPATH/src/golang.org/x/tools`.
+Because the original import paths remain in
+the code, the guru and stringer commands build only after also
+installing golang.org/x/tools. Refer to https:golang.org/x/tools.
 
-## Report Issues / Send Patches
+After the two repos are downloaded, test and build the two commands
+from their respective directories, `cmd/guru` and `cmd/stringer`.
 
-This repository uses Gerrit for code changes. To learn how to submit changes to
-this repository, see https://golang.org/doc/contribute.html.
+## License
 
-The main issue tracker for the tools repository is located at
-https://github.com/golang/go/issues. Prefix your issue with "x/tools/(your
-subdir):" in the subject line, so it is easy to find.
+The license is unchanged from the forked version. It is the BSD 3-clause license.
+
+## Stringer bitflag
+
+Only single-bit bitflag constants are supported. Constants with multiple bits
+set are silently ignored.
+
+A small example:
+
+```
+type M int
+
+//go:generate stringer -bitflag -type=M
+
+const (
+	A M = 1 << iota
+	B
+)
+
+fmt.Println(A)     // prints "A"
+fmt.Println(B | A) // prints "(A|B)"
+```
